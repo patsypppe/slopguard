@@ -24,4 +24,4 @@ def get_rule(rule_id: str) -> Rule | None:
     return _REGISTRY.get(rule_id.upper())
 
 
-from slopguard.rules import hallucination, incomplete, llm_flow, secrets  # noqa: E402,F401
+from slopguard.rules import hallucination, incomplete, llm_agents, llm_flow, secrets  # noqa: E402,F401

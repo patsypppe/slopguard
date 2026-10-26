@@ -49,4 +49,4 @@ ignore = ["E501"]
 "src/slopguard/cli.py" = ["B008"]
 
 [tool.slopguard.scan]
-exclude = ["tests/**"]
+exclude = ["tests/**", "benchmarks/corpus/**"]

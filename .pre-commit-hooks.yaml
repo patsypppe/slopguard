@@ -1,0 +1,7 @@
+- id: slopguard
+  name: slopguard
+  description: Scan staged Python files for LLM-app vulnerabilities and unfinished AI-generated code.
+  entry: slopguard scan --no-network --fail-on high
+  language: python
+  types: [python]
+  require_serial: true

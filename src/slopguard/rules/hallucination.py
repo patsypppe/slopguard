@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import sys
 from collections.abc import Iterable, Iterator
+from datetime import datetime, timezone
 
 from slopguard.context import FileContext
 from slopguard.models import Finding, Rule, RuleMeta, Severity
@@ -143,3 +144,112 @@ class UndeclaredDependency(Rule):
                 f"`{root}` is imported but not declared as a dependency",
                 confidence=0.6,
             )
+
+
+POPULAR_PACKAGES = frozenset(
+    ["requests", "numpy", "pandas", "scipy", "matplotlib", "flask", "django", "fastapi", "pydantic", "sqlalchemy", "pytest", "boto3", "botocore", "urllib3", "setuptools", "certifi", "idna", "charset-normalizer", "cryptography", "pyyaml", "jinja2", "click", "aiohttp", "httpx", "beautifulsoup4", "lxml", "pillow", "scikit-learn", "tensorflow", "torch", "transformers", "openai", "anthropic", "langchain", "tqdm", "typer", "uvicorn", "gunicorn", "redis", "celery", "psycopg2", "pymongo", "openpyxl", "attrs", "packaging", "python-dateutil", "pytz", "colorama", "protobuf", "grpcio", "numba", "seaborn", "plotly", "streamlit", "gradio", "sentencepiece", "tokenizers", "datasets", "accelerate", "huggingface-hub", "langchain-core", "llama-index", "chromadb", "faiss-cpu", "tiktoken", "pytest-cov", "black", "flake8", "mypy", "ruff", "isort", "pylint", "pre-commit", "poetry", "selenium", "scrapy", "paramiko", "pexpect", "websockets", "orjson", "ujson", "markdown", "pygments", "sphinx", "docutils", "jsonschema", "regex", "sympy", "networkx", "xgboost", "lightgbm", "opencv-python", "keras", "nltk", "spacy", "gensim", "python-dotenv"]
+)
+
+
+def _one_edit_apart(a: str, b: str) -> bool:
+    """True when ``a`` and ``b`` differ by one insertion, deletion, substitution or swap."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diffs = [i for i in range(len(a)) if a[i] != b[i]]
+        if len(diffs) == 1:
+            return True
+        return (
+            len(diffs) == 2
+            and diffs[1] == diffs[0] + 1
+            and a[diffs[0]] == b[diffs[1]]
+            and a[diffs[1]] == b[diffs[0]]
+        )
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    return any(long_[:i] + long_[i + 1 :] == short for i in range(len(long_)))
+
+
+@register
+class NewbornPackage(Rule):
+    meta = RuleMeta(
+        id="HAL-02",
+        title="Imported package was published very recently",
+        module="hal",
+        severity=Severity.MEDIUM,
+        explanation=(
+            "Attackers register names that AI assistants tend to invent. A package whose first "
+            "release is only days old, and that you did not choose on purpose, deserves a look."
+        ),
+        fix="Check the package's repository, maintainers and download history before using it, "
+        "or pin a library you already trust.",
+        cwe=("CWE-1357",),
+        owasp=("LLM03:2025 Supply Chain",),
+        status="experimental",
+    )
+
+    def check(self, ctx: FileContext) -> Iterable[Finding]:
+        registry = ctx.project.registry
+        if ctx.tree is None or registry is None:
+            return
+        limit = int(ctx.options(self.meta.id).get("days", 30))
+        now = datetime.now(timezone.utc)
+        for root, line, _guarded in iter_imports(ctx.tree):
+            candidates = third_party_candidates(ctx, root)
+            if candidates is None or root in ctx.project.installed:
+                continue
+            declared = ctx.project.declared or set()
+            for name in candidates:
+                if normalize(name) in declared or registry.exists(name) is not True:
+                    continue
+                born = registry.first_release(name)
+                if born is None:
+                    continue
+                age = (now - born).days
+                if age < limit:
+                    yield ctx.make_finding(
+                        self.meta,
+                        line,
+                        f"`{root}` was first published {age} day(s) ago",
+                        confidence=0.7,
+                    )
+                break
+
+
+@register
+class TyposquatPackage(Rule):
+    meta = RuleMeta(
+        id="HAL-03",
+        title="Imported package name is one typo from a popular package",
+        module="hal",
+        severity=Severity.MEDIUM,
+        explanation=(
+            "Typosquatting packages copy a popular name with one letter changed and ship "
+            "malware. Assistants can reproduce those misspellings."
+        ),
+        fix="Compare the import with the popular package it resembles and use the real name.",
+        cwe=("CWE-1357",),
+        owasp=("LLM03:2025 Supply Chain",),
+    )
+
+    def check(self, ctx: FileContext) -> Iterable[Finding]:
+        if ctx.tree is None:
+            return
+        for root, line, _guarded in iter_imports(ctx.tree):
+            candidates = third_party_candidates(ctx, root)
+            if candidates is None or root in ctx.project.installed:
+                continue
+            for name in map(normalize, candidates):
+                if name in POPULAR_PACKAGES:
+                    break
+                target = next(
+                    (p for p in sorted(POPULAR_PACKAGES) if len(p) >= 6 and _one_edit_apart(name, p)),
+                    None,
+                )
+                if target:
+                    yield ctx.make_finding(
+                        self.meta,
+                        line,
+                        f"`{root}` is one typo away from the popular package `{target}`",
+                        confidence=0.6,
+                    )
+                    break

@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from slopguard import __version__
+from slopguard.bench import run_benchmark
 from slopguard.config import MODULES, STARTER_CONFIG, Config, ConfigError
 from slopguard.context import build_project
 from slopguard.engine import (
@@ -219,3 +220,49 @@ def init(
         raise _fail(f"{target} already exists; use --force to overwrite")
     target.write_text(STARTER_CONFIG)
     typer.echo(f"wrote {target}")
+
+
+@app.command()
+def bench(
+    corpus: Path = typer.Argument(Path("benchmarks/corpus"), help="Folder of labelled files."),
+    fmt: str = typer.Option("terminal", "--format", "-f", help="terminal or json."),
+    min_precision: float = typer.Option(0.0, "--min-precision", help="Exit 1 if any rule is below."),
+    min_recall: float = typer.Option(0.0, "--min-recall", help="Exit 1 if any rule is below."),
+) -> None:
+    """Score slopguard against a labelled corpus (precision, recall and F1 per rule)."""
+    if not corpus.is_dir():
+        raise _fail(f"corpus folder not found: {corpus}")
+    if fmt not in ("terminal", "json"):
+        raise _fail("format must be terminal or json")
+    report = run_benchmark(corpus)
+    if fmt == "json":
+        typer.echo(json.dumps(report.to_dict(), indent=2))
+    else:
+        _print_bench(report)
+    problems = report.failing(min_precision, min_recall)
+    for problem in problems:
+        Console(stderr=True).print(f"below threshold: {problem}", markup=False)
+    raise typer.Exit(EXIT_FINDINGS if problems else EXIT_OK)
+
+
+def _print_bench(report) -> None:
+    def cell(value: float | None) -> str:
+        return "-" if value is None else f"{value:.2f}"
+
+    table = Table(show_header=True, header_style="bold")
+    for column in ("Rule", "TP", "FP", "FN", "Precision", "Recall", "F1"):
+        table.add_column(column, justify="left" if column == "Rule" else "right")
+    for rule_id, score in sorted(report.scores.items()):
+        table.add_row(rule_id, str(score.tp), str(score.fp), str(score.fn),
+                      cell(score.precision), cell(score.recall), cell(score.f1))
+    total = report.overall()
+    table.add_section()
+    table.add_row("overall", str(total.tp), str(total.fp), str(total.fn),
+                  cell(total.precision), cell(total.recall), cell(total.f1))
+    console = Console()
+    console.print(table)
+    console.print(f"{report.files} labelled files", markup=False)
+    for line in report.mismatches:
+        console.print(line, markup=False, style="yellow")
+    for rel in report.unlabelled:
+        console.print(f"unlabelled (skipped): {rel}", markup=False, style="dim")

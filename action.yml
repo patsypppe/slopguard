@@ -1,0 +1,85 @@
+name: slopguard
+description: Scan AI-generated code for LLM-app vulnerabilities, hallucinated imports and unfinished code.
+author: slopguard contributors
+branding:
+  icon: shield
+  color: gray-dark
+
+inputs:
+  path:
+    description: Files or folders to scan.
+    default: "."
+  fail-on:
+    description: Fail the job at this severity or above (critical, high, medium, low, info or none).
+    default: high
+  no-network:
+    description: Skip PyPI lookups (disables HAL-01 and HAL-02).
+    default: "false"
+  upload-sarif:
+    description: Upload results to GitHub code scanning. The job needs `security-events - write`.
+    default: "true"
+  python-version:
+    description: Python version used to run slopguard.
+    default: "3.12"
+  extra-args:
+    description: Extra arguments passed to `slopguard scan`.
+    default: ""
+
+outputs:
+  sarif-file:
+    description: Path of the SARIF report.
+    value: ${{ steps.scan.outputs.sarif }}
+  exit-code:
+    description: Exit code of the scan (0 clean, 1 findings at or above fail-on).
+    value: ${{ steps.scan.outputs.code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install slopguard
+      shell: bash
+      run: python -m pip install --quiet "${{ github.action_path }}"
+
+    - name: Scan
+      id: scan
+      shell: bash
+      env:
+        SG_PATH: ${{ inputs.path }}
+        SG_FAIL_ON: ${{ inputs.fail-on }}
+        SG_NO_NETWORK: ${{ inputs.no-network }}
+        SG_EXTRA: ${{ inputs.extra-args }}
+      run: |
+        sarif="${RUNNER_TEMP}/slopguard.sarif"
+        flags=()
+        if [ "${SG_NO_NETWORK}" = "true" ]; then flags+=(--no-network); fi
+        set +e
+        # shellcheck disable=SC2086
+        slopguard scan ${SG_PATH} --format sarif --output "${sarif}" --fail-on "${SG_FAIL_ON}" "${flags[@]}" ${SG_EXTRA}
+        code=$?
+        set -e
+        echo "sarif=${sarif}" >> "$GITHUB_OUTPUT"
+        echo "code=${code}" >> "$GITHUB_OUTPUT"
+        if [ "${code}" -ge 2 ]; then
+          echo "::error::slopguard failed to run (exit ${code})"
+          exit "${code}"
+        fi
+        # shellcheck disable=SC2086
+        slopguard scan ${SG_PATH} --format markdown --fail-on none "${flags[@]}" ${SG_EXTRA} >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload SARIF
+      if: ${{ inputs.upload-sarif == 'true' && steps.scan.outputs.sarif != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif }}
+        category: slopguard
+
+    - name: Enforce threshold
+      if: ${{ steps.scan.outputs.code == '1' }}
+      shell: bash
+      run: |
+        echo "::error::slopguard found issues at or above '${{ inputs.fail-on }}'"
+        exit 1

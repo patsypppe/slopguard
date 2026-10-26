@@ -34,6 +34,7 @@ def scan(tmp_path: Path) -> Callable[..., list]:
             registry = RegistryClient(
                 cache_path=tmp_path / ".cache.json",
                 fetcher=lambda name: 200 if name in known_packages else 404,
+                json_fetcher=lambda name: None,
             )
         project = build_project(tmp_path, config, network=False, registry=registry)
         rules = [r for r in all_rules() if not rule_ids or r.meta.id in rule_ids]
