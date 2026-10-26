@@ -86,6 +86,36 @@ class Finding:
         }
 
 
+def finding_from_meta(
+    meta: RuleMeta,
+    path: str,
+    line: int,
+    message: str,
+    *,
+    end_line: int | None = None,
+    confidence: float = 0.9,
+    excerpt: str = "",
+    trace: tuple[str, ...] = (),
+    severity: Severity | None = None,
+) -> Finding:
+    """Build a finding for rules that do not run inside a single parsed file."""
+    return Finding(
+        rule_id=meta.id,
+        severity=meta.severity if severity is None else severity,
+        message=message,
+        path=path,
+        line=line,
+        end_line=end_line or line,
+        confidence=confidence,
+        explanation=meta.explanation,
+        fix=meta.fix,
+        cwe=meta.cwe,
+        owasp=meta.owasp,
+        excerpt=excerpt,
+        trace=trace,
+    )
+
+
 class Rule(ABC):
     """Base class for rules. Subclasses set ``meta`` and implement ``check``."""
 

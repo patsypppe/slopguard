@@ -61,7 +61,7 @@ def test_sarif_output_structure(project, tmp_path):
     sarif = json.loads(out.read_text())
     assert sarif["version"] == "2.1.0"
     run = sarif["runs"][0]
-    assert {r["id"] for r in run["tool"]["driver"]["rules"]} == {r.meta.id for r in all_rules()}
+    assert {r["id"] for r in run["tool"]["driver"]["rules"]} == {r.meta.id for r in all_rules() if r.meta.module != "drf"}
     res = run["results"][0]
     assert res["ruleId"] == "LLM-02" and res["level"] == "error"
     assert res["locations"][0]["physicalLocation"]["region"]["startLine"] == 3

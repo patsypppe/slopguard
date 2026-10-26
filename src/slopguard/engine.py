@@ -123,7 +123,6 @@ def run_scan(
     project: ProjectContext,
 ) -> ScanResult:
     result = ScanResult()
-    config = project.config
     for path in files:
         try:
             if path.stat().st_size > MAX_BYTES:
@@ -139,19 +138,36 @@ def run_scan(
         tree, error = _parse(source) if path.suffix == ".py" else (None, None)
         ctx = FileContext(path, rel, source, project, tree, error)
         result.files_scanned += 1
-        for rule in rules:
-            if not _applies(rule, path):
-                continue
-            if _excluded(rel, list(config.rule_options(rule.meta.id).get("ignore", []))):
-                continue
-            try:
-                produced = list(rule.check(ctx))
-            except Exception as exc:  # noqa: BLE001  a crashing rule must not stop the scan
-                result.errors.append(f"{rule.meta.id} crashed on {rel}: {exc!r}")
-                continue
-            result.findings.extend(f for f in produced if not _suppressed(f, ctx.lines))
+        result.findings.extend(_check_file(ctx, rules, result.errors))
     result.findings.sort(key=lambda f: (f.path, f.line, f.rule_id))
     return result
+
+
+def _check_file(ctx: FileContext, rules: list[Rule], errors: list[str]) -> list[Finding]:
+    config = ctx.project.config
+    found: list[Finding] = []
+    for rule in rules:
+        if not _applies(rule, ctx.path):
+            continue
+        if _excluded(ctx.rel, list(config.rule_options(rule.meta.id).get("ignore", []))):
+            continue
+        try:
+            produced = list(rule.check(ctx))
+        except Exception as exc:  # noqa: BLE001  a crashing rule must not stop the scan
+            errors.append(f"{rule.meta.id} crashed on {ctx.rel}: {exc!r}")
+            continue
+        found.extend(f for f in produced if not _suppressed(f, ctx.lines))
+    return found
+
+
+def scan_text(rel: str, source: str, rules: list[Rule], project: ProjectContext) -> list[Finding]:
+    """Scan source held in memory as if it lived at ``rel`` inside the project."""
+    path = project.root / rel
+    tree, error = _parse(source) if path.suffix == ".py" else (None, None)
+    ctx = FileContext(path, rel, source, project, tree, error)
+    findings = _check_file(ctx, rules, [])
+    findings.sort(key=lambda f: (f.path, f.line, f.rule_id))
+    return findings
 
 
 def _applies(rule: Rule, path: Path) -> bool:

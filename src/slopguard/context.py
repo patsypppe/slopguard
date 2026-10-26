@@ -22,6 +22,16 @@ class ProjectContext:
     declared: set[str] | None
     local_modules: set[str]
     installed: dict[str, list[str]]
+    changed: set[Path] | None = None
+    _conventions: Any = None
+
+    def conventions(self) -> Any:
+        """Style conventions mined from files outside the change (computed once)."""
+        if self._conventions is None:
+            from slopguard.drift import mine_conventions
+
+            self._conventions = mine_conventions(self.root, self.config, self.changed or set())
+        return self._conventions
 
     def is_local(self, name: str, file_path: Path) -> bool:
         if name in self.local_modules:
@@ -103,6 +113,7 @@ def build_project(
     *,
     network: bool = True,
     registry: RegistryClient | None = None,
+    changed: set[Path] | None = None,
 ) -> ProjectContext:
     if registry is None and network and config.registry_lookups:
         registry = RegistryClient(ttl_hours=config.cache_ttl_hours)
@@ -117,4 +128,5 @@ def build_project(
         declared=declared_dependencies(root),
         local_modules=_local_module_names(root),
         installed=installed,
+        changed=changed,
     )

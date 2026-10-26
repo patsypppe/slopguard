@@ -14,7 +14,8 @@ else:  # pragma: no cover
 
 from slopguard.models import Severity
 
-MODULES = ("hal", "inc", "sec", "llm")
+MODULES = ("hal", "inc", "sec", "llm", "drf", "spc", "reg")
+DEFAULT_OFF = frozenset({"drf"})  # opt-in: needs a representative baseline of the repo
 
 DEFAULT_EXCLUDE_DIRS = frozenset(
     {
@@ -51,13 +52,22 @@ class ConfigError(Exception):
 class Config:
     exclude: list[str] = field(default_factory=list)
     fail_on: str = "high"
-    modules: dict[str, bool] = field(default_factory=lambda: {m: True for m in MODULES})
+    modules: dict[str, bool] = field(
+        default_factory=lambda: {m: m not in DEFAULT_OFF for m in MODULES}
+    )
     registry_lookups: bool = True
     cache_ttl_hours: int = 24
     rules: dict[str, dict[str, Any]] = field(default_factory=dict)
     taint_sources: list[str] = field(default_factory=list)
     taint_sinks: list[str] = field(default_factory=list)
     taint_sanitizers: list[str] = field(default_factory=list)
+    llm_provider: str = "none"
+    llm_model: str = ""
+    llm_max_tokens: int = 4096
+    llm_base_url: str = ""
+    sandbox_backend: str = "auto"
+    sandbox_image: str = "python:3.12-slim"
+    sandbox_timeout: int = 120
     source_file: Path | None = None
 
     def rule_options(self, rule_id: str) -> dict[str, Any]:
@@ -99,6 +109,31 @@ class Config:
             if not isinstance(ttl, int) or ttl < 0:
                 raise ConfigError("network.cache_ttl_hours: expected a non-negative integer")
             cfg.cache_ttl_hours = ttl
+
+        llm = _table(data, "llm")
+        if "provider" in llm:
+            provider = str(llm["provider"]).lower()
+            if provider not in ("none", "anthropic", "openai", "ollama"):
+                raise ConfigError("llm.provider: expected none, anthropic, openai or ollama")
+            cfg.llm_provider = provider
+        cfg.llm_model = str(llm.get("model", cfg.llm_model))
+        cfg.llm_base_url = str(llm.get("base_url", cfg.llm_base_url))
+        if "max_tokens" in llm:
+            tokens = llm["max_tokens"]
+            if not isinstance(tokens, int) or tokens < 1:
+                raise ConfigError("llm.max_tokens: expected a positive integer")
+            cfg.llm_max_tokens = tokens
+
+        sandbox = _table(data, "sandbox")
+        backend = str(sandbox.get("backend", cfg.sandbox_backend)).lower()
+        if backend not in ("auto", "docker", "unshare", "local"):
+            raise ConfigError("sandbox.backend: expected auto, docker, unshare or local")
+        cfg.sandbox_backend = backend
+        cfg.sandbox_image = str(sandbox.get("image", cfg.sandbox_image))
+        timeout = sandbox.get("timeout", cfg.sandbox_timeout)
+        if not isinstance(timeout, int) or timeout < 1:
+            raise ConfigError("sandbox.timeout: expected a positive integer (seconds)")
+        cfg.sandbox_timeout = timeout
 
         rules = _table(data, "rules")
         for rule_id, options in rules.items():
@@ -172,10 +207,20 @@ hal = true                  # hallucinated or undeclared packages
 inc = true                  # stubs, placeholders, swallowed errors
 sec = true                  # hardcoded secrets
 llm = true                  # model output reaching dangerous sinks
+drf = false                 # style drift against the rest of the repo (opt-in)
 
 [network]
 registry_lookups = true     # query PyPI to check that imports exist
 cache_ttl_hours = 24
+
+# [llm]                      # only used by --spec judging, gen-tests and fix
+# provider = "anthropic"     # anthropic | openai | ollama | none
+# model = "your-model-id"    # no default: model names change, set the one you use
+# max_tokens = 4096
+#
+# [sandbox]                  # where generated tests run
+# backend = "auto"           # auto | docker | unshare | local
+# timeout = 120
 
 # [rules."INC-06"]
 # threshold = 5

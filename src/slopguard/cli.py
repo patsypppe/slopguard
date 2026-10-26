@@ -21,9 +21,14 @@ from slopguard.engine import (
     run_scan,
     write_baseline,
 )
+from slopguard.llm import LLMError, get_provider
 from slopguard.models import Rule, Severity
+from slopguard.regress import RegressionError, regress
+from slopguard.repair import read_sources, repair
 from slopguard.reporters import render_terminal, to_json, to_markdown, to_sarif
 from slopguard.rules import all_rules, get_rule
+from slopguard.sandbox import SandboxError, run_tests
+from slopguard.spec import parse_spec, verdict_findings, verify_spec
 
 app = typer.Typer(
     name="slopguard",
@@ -95,12 +100,15 @@ def scan(
     write_baseline_to: Path | None = typer.Option(None, "--write-baseline", help="Record current findings as a baseline."),
     no_network: bool = typer.Option(False, "--no-network", help="Skip PyPI lookups."),
     config_path: Path | None = typer.Option(None, "--config", help="Path to a slopguard.toml."),
+    spec: Path | None = typer.Option(None, "--spec", help="Check the code against this spec file."),
+    use_llm: bool = typer.Option(False, "--llm", help="Let the configured model judge --spec requirements."),
 ) -> None:
     """Scan code for LLM-app vulnerabilities, hallucinated imports and unfinished code."""
     try:
         exit_code = _scan(
             paths or [Path(".")], fmt, output, severity, fail_on, module or [], rule or [],
             exclude or [], diff, staged, baseline, write_baseline_to, no_network, config_path,
+            spec, use_llm,
         )
     except typer.Exit:
         raise
@@ -110,7 +118,7 @@ def scan(
 
 
 def _scan(paths, fmt, output, severity, fail_on, modules, rule_ids, exclude, diff, staged,
-          baseline, write_baseline_to, no_network, config_path) -> int:
+          baseline, write_baseline_to, no_network, config_path, spec=None, use_llm=False) -> int:
     if fmt not in FORMATS:
         raise _fail(f"unknown format {fmt!r}; expected one of: {', '.join(FORMATS)}")
     missing = [p for p in paths if not p.exists()]
@@ -130,6 +138,7 @@ def _scan(paths, fmt, output, severity, fail_on, modules, rule_ids, exclude, dif
     rules = _select_rules(config, modules, rule_ids)
     suffixes = {suffix for r in rules for suffix in r.file_types}
     files = discover(paths, root, config, suffixes)
+    changed = None
     if diff or staged:
         try:
             changed = changed_files(root, diff, staged)
@@ -137,12 +146,17 @@ def _scan(paths, fmt, output, severity, fail_on, modules, rule_ids, exclude, dif
             raise _fail(str(exc)) from exc
         files = [f for f in files if f in changed]
 
-    project = build_project(root, config, network=not no_network)
+    project = build_project(root, config, network=not no_network, changed=changed)
     result = run_scan(files, rules, project)
     if project.registry is not None:
         project.registry.save()
 
     findings = result.findings
+    if spec is not None:
+        findings = sorted(
+            findings + _spec_findings(spec, paths, root, config, use_llm),
+            key=lambda f: (f.path, f.line, f.rule_id),
+        )
     if write_baseline_to:
         write_baseline(write_baseline_to, findings)
         Console(stderr=True).print(f"baseline written to {write_baseline_to}", markup=False)
@@ -159,6 +173,47 @@ def _scan(paths, fmt, output, severity, fail_on, modules, rule_ids, exclude, dif
     if threshold is not None and any(f.severity >= threshold for f in findings):
         return EXIT_FINDINGS
     return EXIT_OK
+
+
+def _provider(config: Config, what: str):
+    try:
+        provider = get_provider(config)
+    except LLMError as exc:
+        raise _fail(str(exc)) from exc
+    Console(stderr=True).print(
+        f"sending {what} to {provider.name} ({provider.model}); source stays local otherwise",
+        markup=False,
+    )
+    return provider
+
+
+def _read_py_files(paths, root: Path, config: Config) -> list[tuple[str, str]]:
+    files = discover(paths, root, config, {".py"})
+    return [(_rel_to(p, root), p.read_text(errors="replace")) for p in files]
+
+
+def _rel_to(path: Path, root: Path) -> str:
+    return path.relative_to(root).as_posix() if path.is_relative_to(root) else path.as_posix()
+
+
+def _spec_findings(spec: Path, paths, root: Path, config: Config, use_llm: bool):
+    if not spec.is_file():
+        raise _fail(f"spec file not found: {spec}")
+    text = spec.read_text(errors="replace")
+    provider = _provider(config, "requirement text and the best-matching code") if use_llm else None
+    try:
+        verdicts = verify_spec(text, _read_py_files(paths, root, config), provider)
+    except LLMError as exc:
+        raise _fail(f"spec check failed: {exc}") from exc
+    if not verdicts:
+        raise _fail("no requirements found in the spec; use bullet points, or pass --llm to extract them")
+    counts = {s: sum(v.status == s for v in verdicts) for s in ("met", "partial", "missing")}
+    Console(stderr=True).print(
+        f"spec: {counts['met']} met, {counts['partial']} partial, {counts['missing']} missing "
+        f"({'model-judged' if provider else 'name matching only; behaviour not verified'})",
+        markup=False,
+    )
+    return verdict_findings(_rel_to(spec.resolve(), root), verdicts)
 
 
 def _emit(fmt, output, findings, rules, files_scanned, errors) -> None:
@@ -180,6 +235,140 @@ def _emit(fmt, output, findings, rules, files_scanned, errors) -> None:
         Path(output).write_text(text if text.endswith("\n") else text + "\n")
     else:
         typer.echo(text)
+
+
+@app.command("regress")
+def regress_cmd(
+    base: str = typer.Option("HEAD", "--base", help="Git ref to compare against."),
+    run_tests_flag: bool = typer.Option(False, "--run-tests", help="Also run the suite at the base and now."),
+    timeout: int = typer.Option(300, "--timeout", help="Seconds allowed per test run."),
+    fmt: str = typer.Option("terminal", "--format", "-f", help="terminal, json, markdown or sarif."),
+    config_path: Path | None = typer.Option(None, "--config"),
+) -> None:
+    """Find deleted, skipped or weakened tests, and tests that passed before and now fail."""
+    if fmt not in FORMATS:
+        raise _fail(f"unknown format {fmt!r}; expected one of: {', '.join(FORMATS)}")
+    root = find_root([Path(".")])
+    try:
+        Config.load(root, config_path)
+        findings = regress(root, base, run_tests_flag, timeout)
+    except (ConfigError, RegressionError) as exc:
+        raise _fail(str(exc)) from exc
+    rules = [r for r in all_rules() if r.meta.module == "reg"]
+    _emit(fmt, None, findings, rules, 0, [])
+    raise typer.Exit(EXIT_FINDINGS if any(f.severity >= Severity.HIGH for f in findings) else EXIT_OK)
+
+
+
+@app.command("gen-tests")
+def gen_tests(
+    spec: Path = typer.Option(..., "--spec", help="Spec file with the requirements."),
+    paths: list[Path] | None = typer.Argument(None, help="Code to test (default: current folder)."),
+    out: Path = typer.Option(Path("tests/generated/test_spec_requirements.py"), "--out", help="Where to write the tests."),
+    run: bool = typer.Option(False, "--run", help="Run the tests in the sandbox and report per requirement."),
+    config_path: Path | None = typer.Option(None, "--config"),
+) -> None:
+    """Ask the configured model for pytest tests that check each requirement."""
+    from slopguard.gentests import apply_test_results, generate_tests
+    from slopguard.spec import build_index, judge_heuristic
+
+    paths = paths or [Path(".")]
+    root = find_root(paths)
+    try:
+        config = Config.load(root, config_path)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+    if not spec.is_file():
+        raise _fail(f"spec file not found: {spec}")
+    requirements = parse_spec(spec.read_text(errors="replace"))
+    if not requirements:
+        raise _fail("no requirements found in the spec; use bullet points")
+    files = _read_py_files(paths, root, config)
+    provider = _provider(config, "requirement text and public function signatures")
+    try:
+        code = generate_tests(requirements, files, provider)
+    except LLMError as exc:
+        raise _fail(f"test generation failed: {exc}") from exc
+    target = out if out.is_absolute() else root / out
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(code)
+    typer.echo(f"wrote {target}")
+    if not run:
+        typer.echo("review the file, then run it, or re-run with --run to use the sandbox")
+        return
+    index = build_index(files)
+    verdicts = [judge_heuristic(r, index) for r in requirements]
+    try:
+        outcome = run_tests(root, {_rel_to(target, root): code}, backend=config.sandbox_backend,
+                            image=config.sandbox_image, timeout=config.sandbox_timeout)
+    except SandboxError as exc:
+        raise _fail(str(exc)) from exc
+    verdicts = apply_test_results(verdicts, outcome)
+    table = Table(show_header=True, header_style="bold")
+    for column in ("Req", "Status", "Source", "Reason"):
+        table.add_column(column)
+    for v in verdicts:
+        table.add_row(v.requirement.id, v.status, v.source, v.reason)
+    Console().print(table)
+    typer.echo(f"sandbox: {outcome.backend}; exit {outcome.returncode}"
+               + ("; timed out" if outcome.timed_out else ""))
+    raise typer.Exit(EXIT_OK if outcome.passed else EXIT_FINDINGS)
+
+
+@app.command()
+def fix(
+    paths: list[Path] | None = typer.Argument(None, help="Files or folders to repair."),
+    max_rounds: int = typer.Option(3, "--max-rounds", help="Stop after this many rounds."),
+    min_severity: str = typer.Option("high", "--min-severity", help="Only repair findings at or above this."),
+    apply: bool = typer.Option(False, "--apply", help="Write accepted changes to disk."),
+    yes: bool = typer.Option(False, "--yes", help="Do not ask before writing with --apply."),
+    no_network: bool = typer.Option(False, "--no-network"),
+    config_path: Path | None = typer.Option(None, "--config"),
+) -> None:
+    """Scan, ask the configured model for fixes, re-scan, and keep only real improvements.
+
+    By default this only prints a diff. Use --apply to write the files.
+    """
+    paths = paths or [Path(".")]
+    for path in paths:
+        if not path.exists():
+            raise _fail(f"path not found: {path}")
+    try:
+        minimum = Severity.parse(min_severity)
+        root = find_root(paths)
+        config = Config.load(root, config_path)
+    except (ConfigError, ValueError) as exc:
+        raise _fail(str(exc)) from exc
+    rules = _select_rules(config, [], [])
+    suffixes = {".py"}
+    files = discover(paths, root, config, suffixes)
+    if not files:
+        raise _fail("no Python files to repair")
+    provider = _provider(config, "each file that has serious findings, plus the findings")
+    project = build_project(root, config, network=not no_network)
+    result = repair(read_sources(files, root), rules, project, provider,
+                    max_rounds=max_rounds, minimum=minimum)
+    console = Console()
+    for round_ in result.rounds:
+        for attempt in round_.attempts:
+            mark = "accepted" if attempt.accepted else "rejected"
+            console.print(f"round {round_.number}: {attempt.path}: {mark} ({attempt.note})", markup=False)
+    console.print(f"stopped: {result.stopped}", markup=False)
+    serious = [f for f in result.remaining if f.severity >= minimum]
+    console.print(f"{len(serious)} serious finding(s) remain", markup=False)
+    diff = result.diff()
+    if not diff:
+        raise typer.Exit(EXIT_FINDINGS if serious else EXIT_OK)
+    typer.echo(diff)
+    if apply and (yes or typer.confirm("Write these changes to disk?")):
+        for rel in result.changed_files():
+            (root / rel).write_text(result.current[rel])
+        console.print(f"wrote {len(result.changed_files())} file(s)", markup=False)
+    elif apply:
+        console.print("nothing written", markup=False)
+    else:
+        console.print("dry run: re-run with --apply to write these changes", markup=False)
+    raise typer.Exit(EXIT_FINDINGS if serious else EXIT_OK)
 
 
 @app.command("rules")
