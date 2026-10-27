@@ -1,0 +1,16 @@
+# Copy next to your code and adjust. `slopguard init` writes a fuller, commented version.
+
+[scan]
+exclude = ["tests/fixtures/**"]
+fail_on = "high"
+
+[modules]
+drf = true            # opt in to style drift checks
+
+[network]
+registry_lookups = true
+
+# Only needed for `scan --spec --llm`, `gen-tests` and `fix`:
+# [llm]
+# provider = "anthropic"
+# model = "your-model-id"

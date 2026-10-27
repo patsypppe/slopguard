@@ -5,16 +5,28 @@ written by an AI assistant is **secure, complete and real**: it traces model out
 dangerous calls, flags imports of packages that do not exist, and finds stubs, placeholders
 and swallowed errors.
 
-> Status: **alpha (Phase 3)**. The full plan is in the product and requirements
-> document linked from [docs/PRD.md](docs/PRD.md).
+> Status: **release candidate (1.0.0rc1), not yet on PyPI**. The plan is in the product and
+> requirements document linked from [docs/PRD.md](docs/PRD.md); changes are in the
+> [changelog](CHANGELOG.md). Python only (see [why](docs/decisions/0001-javascript-typescript.md)).
 
 ## Install
 
 ```bash
-pipx install slopguard        # once published
+pipx install --pre slopguard  # once published (see docs/releasing.md)
 # or from a clone:
 python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
 ```
+
+## Try it
+
+```bash
+slopguard scan examples/vulnerable_agent --spec examples/SPEC.md
+```
+
+The demo contains a shell tool, untrusted input in a system prompt, `eval` of model output, a stub
+and a hardcoded token. Look at the spec result too: requirement R2 ("`answer()` never executes code")
+shows as **met** from names alone even though `answer()` calls `eval`. Only `--llm` can judge that,
+which is why the offline mode says "behaviour not verified".
 
 ## Use
 
@@ -45,7 +57,7 @@ Exit codes: `0` clean or below `--fail-on`, `1` findings at or above it (default
 | LLM-08 | high | Agent tools whose model-chosen arguments reach shell, code, SQL, files or the network; shell and Python REPL toolkits; `allow_dangerous_*=True` |
 | LLM-09 | medium | Destructive agent tools with no confirmation step |
 | LLM-12 | low | OpenAI-style model calls with no output token cap |
-| HAL-01 | high | Imports of packages that do not exist on PyPI |
+| HAL-01 | high | Imports of packages that do not exist on PyPI (medium for lazy, optional or type-only imports) |
 | HAL-02 | medium | Imports of packages first published only days ago (experimental) |
 | HAL-03 | medium | Import names one typo away from a popular package |
 | HAL-04 | medium | Imports not declared in `requirements*.txt` or `pyproject.toml` |
@@ -143,17 +155,46 @@ model = "your-model-id"     # no default; model names change
 Keys come from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. The clients are plain HTTPS with no SDK.
 They are tested against local servers that mimic each wire format, **not against the live APIs**.
 
-## Benchmark
+## How well does it work?
+
+Three checks, each reproducible from this repository. Read the caveats; none of them is a
+guarantee.
+
+**1. Labelled corpus** (`slopguard bench`, 34 files). Every rule scores 1.00 precision, and
+overall recall is 0.91 with two labelled misses (a value that crosses a function boundary or goes
+through `self`). The corpus is small, written by the maintainers and used to tune the rules, so
+treat it as a regression gate.
+
+**2. Other scanners on the same corpus** ([full report](docs/benchmarks.md)). Files flagged at
+medium severity or higher, run as external programs:
+
+| Tool | LLM-app security (15) | Secrets (1) | Incomplete code (4) | Hallucinated packages (1) | False alarms on 13 safe files |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| slopguard | 12 | 1 | 3 | 1 | 0 |
+| Bandit | 6 | 0 | 0 | 0 | 1 |
+| Semgrep, public python rules | 8 | 0 | 2 | 0 | 2 |
+| Semgrep, public ai rules | 12 | 0 | 0 | 0 | 6 |
+| vibechck | 0 | 0 | 2 | 0 | 1 |
+
+This corpus is built around the problems slopguard targets, so it flatters slopguard. Bandit and
+Semgrep are broader tools that were not designed for these cases. A "flag" can be for an unrelated
+reason; the report lists the rule IDs. Semgrep's `ai` rules are SDK best-practice lints, which is why
+they flag so many safe files. Semgrep also catches the two cross-function cases slopguard misses,
+because it flags any dynamic `eval` regardless of where the value came from.
+
+**3. Mature packages as a false-positive control** ([report](docs/real-world-check.md)). 1.5 million
+lines across twelve well-reviewed packages, including the OpenAI, Anthropic, LangChain and LiteLLM
+SDKs: **0 critical or high findings** after tuning. The first run produced 122 critical findings
+(environment-variable names read as secrets) and about 900 medium ones; fixing those is recorded in the
+changelog. About 25 medium findings remain, mostly module-level functions with no body, and a few
+hundred low ones. This measures noise only. These packages are not AI-generated, so it says nothing about
+detection.
 
 ```bash
-slopguard bench                          # score the shipped corpus
-slopguard bench --min-precision 0.85     # exit 1 if any rule falls below
+slopguard bench --min-precision 0.85                 # checks 1
+python benchmarks/compare.py --help                  # checks 2 (needs the other tools installed)
+python benchmarks/realworld.py                       # checks 3 (downloads packages from PyPI)
 ```
-
-`benchmarks/corpus/` holds labelled files (`# expect: RULE-ID` or `# expect: none`).
-Scoring is per file. The corpus is small and written by the maintainers, so treat its numbers
-as a regression gate, not as a claim about accuracy on real projects. Comparison against
-other scanners is planned for Phase 4.
 
 ## GitHub Action
 

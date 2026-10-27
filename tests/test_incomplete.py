@@ -54,8 +54,9 @@ def test_swallowed_exceptions(scan):
         "try:\n    risky()\nexcept Exception as e:\n    log(e)\n"
     )
     findings = scan({"a.py": source}, rule_ids=("INC-04",))
-    assert [f.line for f in findings] == [3, 7, 11]
-    assert findings[2].confidence < findings[0].confidence
+    assert [f.line for f in findings] == [3, 7]  # narrow types are deliberate, so not flagged
+    assert findings[0].severity.label == "medium" and findings[1].severity.label == "low"
+    assert findings[1].confidence < findings[0].confidence
 
 
 def test_chat_residue_outside_strings(scan):

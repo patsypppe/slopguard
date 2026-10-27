@@ -23,10 +23,30 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Lint
-        run: ruff check src tests
+        run: ruff check src tests benchmarks/compare.py benchmarks/realworld.py
       - name: Test
         run: pytest -q
       - name: Scan this repository with itself
         run: slopguard scan . --no-network
       - name: Benchmark gate
         run: slopguard bench --min-precision 0.85
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and check the distribution
+        run: |
+          python -m pip install build twine
+          python -m build
+          twine check dist/*
+      - name: Install the wheel in a clean environment and run it
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+          /tmp/clean/bin/slopguard --version
+          /tmp/clean/bin/slopguard rules > /dev/null
+          /tmp/clean/bin/slopguard scan examples/vulnerable_agent --no-network --fail-on none

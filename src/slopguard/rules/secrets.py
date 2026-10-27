@@ -26,7 +26,7 @@ PROVIDER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 GENERIC_ASSIGNMENT = re.compile(
     r"""(?ix)
-    \b([A-Za-z_][\w.]*?(?:api[_-]?key|secret|token|passwd|password|auth[_-]?key|access[_-]?key)\w*)
+    \b([\w.]*?(?:api[_-]?key|secret|token|passwd|password|auth[_-]?key|access[_-]?key)\w*)
     \s*[:=]\s*(["'])([^"'\s]{12,})\2
     """
 )
@@ -35,6 +35,12 @@ PLACEHOLDER_HINTS = (
     "fake", "redacted", "insert", "<", ">", "${", "{{", "...", "todo", "none", "null",
 )
 MIN_ENTROPY = 3.0
+# A name like ANTHROPIC_API_KEY or "llm.token_count" is a label, not a credential.
+NON_SECRET_NAME = re.compile(
+    r"(?i)(_env|_env_var|_name|_header|_field|_prefix|_path|_url|_type|_file|_param|_attr|_label)$"
+)
+BASE64_BODY = re.compile(r"[A-Za-z0-9+/=]{40,}")
+SYMBOLS = frozenset("!@#$%^&*()+=[]{}|;<>?~")
 
 
 def _entropy(value: str) -> float:
@@ -46,9 +52,16 @@ def _mask(value: str) -> str:
     return f"{value[:4]}…({len(value)} chars)"
 
 
-def _looks_real(value: str) -> bool:
+def _looks_real(value: str, name: str = "") -> bool:
+    """Heuristic: a credential has a digit or symbol; names, paths and env-var labels do not."""
     lowered = value.lower()
-    if any(hint in lowered for hint in PLACEHOLDER_HINTS):
+    if any(hint in lowered for hint in PLACEHOLDER_HINTS) or NON_SECRET_NAME.search(name):
+        return False
+    if value.startswith(("/", "http")) or "://" in value:
+        return False  # an endpoint or URL
+    if re.sub(r"[-_.]", "", lowered) == re.sub(r"[-_.]", "", name.lower().rsplit(".", 1)[-1]):
+        return False  # the value just repeats the variable's name
+    if not (any(c.isdigit() for c in value) or SYMBOLS & set(value)):
         return False
     return _entropy(value) >= MIN_ENTROPY
 
@@ -76,6 +89,8 @@ class HardcodedSecret(Rule):
             if hit is None:
                 continue
             label, secret = hit
+            if label == "private key block" and not self._has_key_body(ctx.lines, number):
+                continue
             masked = text.replace(secret, _mask(secret)).strip()
             yield ctx.make_finding(
                 self.meta,
@@ -86,12 +101,20 @@ class HardcodedSecret(Rule):
             )
 
     @staticmethod
+    def _has_key_body(lines: list[str], number: int) -> bool:
+        """A key block only counts when base64 key material follows the header."""
+        window = lines[number - 1 : number + 3]
+        header_end = window[0].find("PRIVATE KEY")
+        window[0] = window[0][header_end:] if header_end != -1 else window[0]
+        return any(BASE64_BODY.search(line) for line in window)
+
+    @staticmethod
     def _match(text: str) -> tuple[str, str] | None:
         for label, pattern in PROVIDER_PATTERNS:
             found = pattern.search(text)
-            if found:
+            if found and "example" not in found.group(0).lower():
                 return label, found.group(0)
         generic = GENERIC_ASSIGNMENT.search(text)
-        if generic and _looks_real(generic.group(3)):
+        if generic and "example" not in text.lower() and _looks_real(generic.group(3), generic.group(1)):
             return "credential assignment", generic.group(3)
         return None

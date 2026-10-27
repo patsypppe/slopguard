@@ -10,7 +10,7 @@ from typing import Any
 
 from slopguard.config import Config
 from slopguard.manifest import declared_dependencies
-from slopguard.models import Finding, RuleMeta
+from slopguard.models import Finding, RuleMeta, Severity
 from slopguard.registry import RegistryClient
 
 
@@ -74,10 +74,11 @@ class FileContext:
         confidence: float = 0.9,
         excerpt: str | None = None,
         trace: tuple[str, ...] = (),
+        severity: Severity | None = None,
     ) -> Finding:
         return Finding(
             rule_id=meta.id,
-            severity=meta.severity,
+            severity=meta.severity if severity is None else severity,
             message=message,
             path=self.rel,
             line=line,

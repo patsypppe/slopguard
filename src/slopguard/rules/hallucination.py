@@ -34,7 +34,37 @@ ALIASES: dict[str, list[str]] = {
     "fitz": ["pymupdf"],
     "mpl_toolkits": ["matplotlib"],
     "tomli_w": ["tomli-w"],
+    "pkg_resources": ["setuptools"],
+    "_distutils_hack": ["setuptools"],
+    "jose": ["python-jose"],
+    "MySQLdb": ["mysqlclient"],
+    "ldap": ["python-ldap"],
+    "zmq": ["pyzmq"],
+    "usb": ["pyusb"],
+    "wx": ["wxpython"],
+    "gi": ["pygobject"],
+    "Xlib": ["python-xlib"],
+    "socks": ["pysocks"],
+    "nacl": ["pynacl"],
+    "slugify": ["python-slugify"],
+    "dns": ["dnspython"],
+    "ruamel": ["ruamel-yaml"],
+    "markdown_it": ["markdown-it-py"],
+    "win32api": ["pywin32"],
+    "win32con": ["pywin32"],
+    "pythoncom": ["pywin32"],
+    "psycopg2": ["psycopg2", "psycopg2-binary"],
+    "grpc": ["grpcio"],
+    "faiss": ["faiss-cpu", "faiss-gpu"],
+    "umap": ["umap-learn"],
+    "Bio": ["biopython"],
+    "lark": ["lark", "lark-parser"],
+    "opentelemetry": ["opentelemetry-api", "opentelemetry-sdk"],
+    "opensearchpy": ["opensearch-py"],
 }
+# stdlib modules added in recent Python versions, so scanning on an older interpreter does not
+# report them as missing packages
+RECENT_STDLIB = frozenset({"tomllib", "annotationlib", "compression", "zoneinfo", "graphlib"})
 SKIP_ROOTS = frozenset({"google", "azure", "__main__", "conftest", "_typeshed"})
 
 
@@ -66,9 +96,30 @@ def iter_imports(tree: ast.Module) -> Iterator[tuple[str, int, bool]]:
                 yield name, node.lineno, id(node) in guarded
 
 
+def deferred_import_lines(tree: ast.Module) -> set[int]:
+    """Lines of imports that only run lazily (inside a function) or only for type checking."""
+    lines: set[int] = set()
+
+    def mark(node: ast.AST) -> None:
+        for sub in ast.walk(node):
+            if isinstance(sub, (ast.Import, ast.ImportFrom)):
+                lines.add(sub.lineno)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            mark(node)
+        elif isinstance(node, ast.If):
+            test = node.test
+            name = test.id if isinstance(test, ast.Name) else getattr(test, "attr", "")
+            if name == "TYPE_CHECKING":
+                for stmt in node.body:
+                    mark(stmt)
+    return lines
+
+
 def third_party_candidates(ctx: FileContext, root: str) -> list[str] | None:
     """Distribution names an import could come from, or None for stdlib and local modules."""
-    if root in sys.stdlib_module_names or root == "__future__":
+    if root in sys.stdlib_module_names or root in RECENT_STDLIB or root == "__future__":
         return None
     if root in SKIP_ROOTS or root.startswith("_"):
         return None
@@ -97,18 +148,22 @@ class NonexistentPackage(Rule):
         registry = ctx.project.registry
         if ctx.tree is None or registry is None:
             return
-        for root, line, _guarded in iter_imports(ctx.tree):
+        deferred = deferred_import_lines(ctx.tree)
+        for root, line, guarded in iter_imports(ctx.tree):
             candidates = third_party_candidates(ctx, root)
             if candidates is None or root in ctx.project.installed:
                 continue
             answers = [registry.exists(name) for name in candidates]
             if any(a is True or a is None for a in answers):
                 continue  # exists, or we could not tell
+            optional = guarded or line in deferred  # may come from a private index or extra
             yield ctx.make_finding(
                 self.meta,
                 line,
-                f"`{root}` is not on PyPI and is not a local or installed module",
-                confidence=0.85,
+                f"`{root}` is not on PyPI and is not a local or installed module"
+                + (" (optional or lazy import)" if optional else ""),
+                confidence=0.5 if optional else 0.85,
+                severity=Severity.MEDIUM if optional else None,
             )
 
 

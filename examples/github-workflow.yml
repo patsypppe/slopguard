@@ -1,0 +1,22 @@
+# .github/workflows/slopguard.yml
+name: slopguard
+on: [pull_request]
+
+permissions:
+  contents: read
+  security-events: write   # lets the SARIF upload reach code scanning
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for regress --base
+      - uses: patsypppe/slopguard@main
+        with:
+          fail-on: high
+      - name: Did this change delete or weaken tests?
+        run: |
+          pip install slopguard
+          slopguard regress --base origin/${{ github.base_ref }}

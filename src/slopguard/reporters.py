@@ -55,6 +55,11 @@ def render_terminal(
         console.print()
     for error in errors:
         console.print(Text(f"warning: {error}", style="yellow"))
+    if files_scanned == 0:
+        console.print(
+            Text("warning: no supported files found (slopguard reads Python, .env and common "
+                 "config files), so this is not a clean result", style="yellow")
+        )
     counts = summarize(findings)
     parts = [f"{n} {name}" for name, n in counts.items() if n]
     summary = ", ".join(parts) if parts else "no findings"

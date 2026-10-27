@@ -187,3 +187,20 @@ def test_default_excludes_skip_venv(project):
     (node / "evil.py").write_text(DANGEROUS)
     data = json.loads(invoke("scan", str(project), "--no-network", "-f", "json").stdout)
     assert [f["path"] for f in data["findings"]] == ["bad.py"]
+
+
+def test_rules_reference_doc_is_up_to_date():
+    from pathlib import Path
+
+    from slopguard.cli import rules_markdown
+
+    doc = Path(__file__).resolve().parent.parent / "docs" / "rules.md"
+    assert doc.read_text() == rules_markdown(), "run: slopguard rules --markdown > docs/rules.md"
+    assert runner.invoke(app, ["rules", "--markdown"]).stdout == rules_markdown()
+
+
+def test_zero_files_is_not_reported_as_clean(tmp_path):
+    (tmp_path / "app.js").write_text("console.log(1)\n")
+    result = invoke("scan", str(tmp_path), "--no-network")
+    assert result.exit_code == 0
+    assert "no supported files found" in result.stdout and "not a clean result" in result.stdout

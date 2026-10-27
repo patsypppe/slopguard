@@ -15,10 +15,10 @@ from slopguard.rules import register
 PLACEHOLDER_COMMENT = re.compile(
     r"""(?ix)
     \b(rest|remainder|remaining)\s+of\s+(the\s+)?(code|file|function|method|class|implementation|logic)\b
-    | \.\.\.\s*(existing|previous|other|same|more)\b
+    | ^\.\.\.\s*\w
     | \b(existing|previous|original)\s+(code|implementation|logic)\s+(here|remains|unchanged|goes)
-    | \b(implementation|logic|code)\s+(goes\s+)?here\b
-    | \b(add|insert|put|write)\s+(your\s+)?(code|logic|implementation)\s+here\b
+    | ^(add|insert|put|write|place|implement)\b.{0,40}\b(code|logic|implementation|handler|function|method|body)\b.{0,30}\bhere\b
+    | ^your\b.{0,30}\bhere\b
     | \bsame\s+as\s+(before|above)\b
     """
 )
@@ -38,6 +38,10 @@ BENIGN_EXCEPTIONS = frozenset(
         "CancelledError",
         "asyncio.CancelledError",
     }
+)
+INTENT_DOC = re.compile(
+    r"(?i)\b(overrid\w*|subclass\w*|no-?op|hook|placeholder|default implementation|interface|"
+    r"abstract|intentionally|do(es)? nothing)\b"
 )
 TRUNCATION_HINTS = ("was never closed", "unexpected eof", "expected an indented block", "unterminated")
 
@@ -165,18 +169,23 @@ class HollowFunction(Rule):
                 continue
             if cls is not None and _base_names(cls) & {"ABC", "Protocol", "ABCMeta"}:
                 continue
+            if INTENT_DOC.search(ast.get_docstring(func) or ""):
+                continue
             body = [s for s in func.body if not _is_docstring(s)]
             kind = self._hollow_kind(body)
             if kind is None:
                 continue
-            soft = kind == "docstring only" or (kind == "NotImplementedError" and cls is not None)
-            confidence = 0.5 if soft else 0.85
+            # A hollow method is usually a hook for subclasses, and `-> T: ...` a typing stub; a hollow
+            # free function is a real stub.
+            typed_stub = kind == "ellipsis" and func.returns is not None
+            is_method = cls is not None or typed_stub
             yield ctx.make_finding(
                 self.meta,
                 func.lineno,
                 f"`{func.name}` has no implementation ({kind})",
                 end_line=getattr(func, "end_lineno", None),
-                confidence=confidence,
+                confidence=0.4 if is_method else 0.85,
+                severity=Severity.LOW if is_method else None,
             )
 
     @staticmethod
@@ -213,6 +222,8 @@ class SwallowedException(Rule):
     def check(self, ctx: FileContext) -> Iterable[Finding]:
         if ctx.tree is None:
             return
+        comments, _ = comments_and_string_lines(ctx)
+        comment_lines = {line for line, _text in comments}
         for node in ast.walk(ctx.tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
@@ -222,14 +233,21 @@ class SwallowedException(Rule):
             names = self._exception_names(node.type)
             if names and names <= BENIGN_EXCEPTIONS:
                 continue
-            broad = not names or bool(names & {"Exception", "BaseException"})
-            label = "bare except" if node.type is None else f"except {', '.join(sorted(names))}"
+            end = getattr(node, "end_lineno", node.lineno) or node.lineno
+            if comment_lines & set(range(node.lineno, end + 1)):
+                continue  # a comment says why the error is ignored
+            bare = node.type is None
+            broad = names & {"Exception", "BaseException"}
+            if not (bare or broad):
+                continue  # catching a narrow type is a deliberate choice
+            label = "bare except" if bare else f"except {', '.join(sorted(names))}"
             yield ctx.make_finding(
                 self.meta,
                 node.lineno,
-                f"Exception silently ignored ({label})",
-                end_line=getattr(node, "end_lineno", None),
-                confidence=0.9 if broad else 0.6,
+                f"Exception silently ignored ({label}) with no explanation",
+                end_line=end,
+                confidence=0.9 if bare else 0.6,
+                severity=None if bare else Severity.LOW,
             )
 
     @staticmethod
