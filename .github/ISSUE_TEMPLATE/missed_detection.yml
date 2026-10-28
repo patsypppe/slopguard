@@ -1,0 +1,29 @@
+name: Missed problem
+description: slopguard should have reported something and did not
+labels: ["false-negative"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some misses are known: values that cross a function boundary or live on `self`, and SDKs without a
+        built-in pattern (see docs/how-it-works.md). Reports of other misses are very welcome.
+        **Please do not paste secrets or proprietary code.**
+  - type: textarea
+    id: code
+    attributes:
+      label: Smallest code that should be reported
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should it report, and why is that a real problem?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: slopguard version
+    validations:
+      required: true

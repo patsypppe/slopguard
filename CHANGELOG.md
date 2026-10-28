@@ -38,6 +38,24 @@ were tightened ([details](docs/real-world-check.md)):
 - HAL-01 knows more import-name aliases and recent stdlib modules, and reports optional, lazy and
   `TYPE_CHECKING` imports as medium.
 
+### Added since the first draft of this release
+
+- `slopguard.scan()` and `slopguard.scan_source()`, a supported Python API with a `py.typed` marker.
+- `[packages] private` to tell the HAL rules about imports from a private index.
+- Generated reference pages (`slopguard.docgen`) kept in sync by tests, a full documentation set, and
+  contributor files: code of conduct, support guide, issue and pull-request templates, Dependabot,
+  `Makefile`, `.editorconfig` and a pre-commit config.
+- A release workflow that dry-runs to TestPyPI and publishes to PyPI by trusted publishing.
+
+### Safety
+
+- `slopguard fix` never sends a file containing a hardcoded credential to a model.
+- The terminal output warns when no supported files were found, so an unsupported language is not mistaken for a clean scan.
+
+### Removed
+
+- The `[llm] max_tokens` setting, which was accepted but never used.
+
 ### Known limitations
 
 - The taint tracker does not follow values across functions or through instance attributes.

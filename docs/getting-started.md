@@ -27,7 +27,7 @@ slopguard scan examples/vulnerable_agent
 You will see findings grouped by file:
 
 ```text
-examples/vulnerable_agent/app.py
+vulnerable_agent/app.py
   27   CRITICAL   LLM-02  Model output reaches eval() without validation
         return eval(reply.content[0].text)
         ↳ line 21: model output from client.messages.create()

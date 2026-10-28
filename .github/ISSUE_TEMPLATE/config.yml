@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem in slopguard itself
+    url: https://github.com/patsypppe/slopguard/security/advisories/new
+    about: Please report privately, not in a public issue. See SECURITY.md.
+  - name: Question or how-do-I
+    url: https://github.com/patsypppe/slopguard/blob/main/docs/faq.md
+    about: Check the FAQ and troubleshooting guide first.

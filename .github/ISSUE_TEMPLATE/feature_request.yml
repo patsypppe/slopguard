@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a rule, an integration, or an improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation and, for a new rule, show code an AI assistant could plausibly write.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like slopguard to do?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I would be willing to work on this (see docs/writing-rules.md for rules)
