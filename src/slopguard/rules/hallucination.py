@@ -121,7 +121,7 @@ def third_party_candidates(ctx: FileContext, root: str) -> list[str] | None:
     """Distribution names an import could come from, or None for stdlib and local modules."""
     if root in sys.stdlib_module_names or root in RECENT_STDLIB or root == "__future__":
         return None
-    if root in SKIP_ROOTS or root.startswith("_"):
+    if root in SKIP_ROOTS or root.startswith("_") or root in ctx.config.private_packages:
         return None
     if ctx.project.is_local(root, ctx.path):
         return None
@@ -139,7 +139,8 @@ class NonexistentPackage(Rule):
             "AI assistants invent plausible package names. Installing a name that does not "
             "exist fails, and an attacker can register it and ship malware (slopsquatting)."
         ),
-        fix="Check the import. Use the real package name, or remove the dependency.",
+        fix="Check the import. Use the real package name, or remove the dependency. If it comes "
+        "from a private index, list it under `[packages] private` in slopguard.toml.",
         cwe=("CWE-829",),
         owasp=("LLM03:2025 Supply Chain",),
     )

@@ -159,6 +159,9 @@ def _attempt(rel, source, before, rules, project, provider, minimum):
     serious = _serious(before, minimum)
     if len(source) > MAX_FILE_CHARS:
         return Attempt(rel, False, "file too large to send", len(serious)), source, before
+    if any(f.rule_id == "SEC-01" for f in before):
+        note = "file contains a hardcoded credential; not sent to a model. Remove and rotate it first"
+        return Attempt(rel, False, note, len(serious)), source, before
     try:
         answer = provider.complete(SYSTEM, _prompt(rel, source, serious), 8000)
     except LLMError as exc:

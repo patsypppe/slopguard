@@ -159,3 +159,24 @@ def test_first_release_is_cached(tmp_path):
     assert first is not None and first.year == 2024
     client.first_release("some-pkg")
     assert calls == ["some-pkg"]
+
+
+def test_private_packages_are_skipped_by_every_hal_rule(scan):
+    from slopguard.config import Config
+
+    source = "import acme_internal\nimport reqeusts\n"
+    cfg = Config(private_packages=["acme_internal"])
+    found = scan({"a.py": source, "requirements.txt": "requests\n"}, config=cfg, network=True,
+                 rule_ids=("HAL-01", "HAL-03", "HAL-04"))
+    assert not [f for f in found if "acme_internal" in f.message]
+    assert any("reqeusts" in f.message for f in found)  # only the named package is exempt
+
+
+def test_private_packages_config_is_validated():
+    import pytest
+
+    from slopguard.config import Config, ConfigError
+
+    assert Config.from_mapping({"packages": {"private": ["a", "b"]}}).private_packages == ["a", "b"]
+    with pytest.raises(ConfigError):
+        Config.from_mapping({"packages": {"private": "a"}})

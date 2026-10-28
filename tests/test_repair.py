@@ -152,3 +152,11 @@ def test_cli_fix_needs_a_provider(tmp_path):
     (tmp_path / "app.py").write_text(BAD)
     result = CliRunner().invoke(app, ["fix", str(tmp_path)])
     assert result.exit_code == 2 and "no LLM provider" in result.output
+
+
+def test_files_with_hardcoded_credentials_are_never_sent_to_the_model(setup):
+    leaky = BAD + "\nTOKEN = 'q9X$kP2mZr7LwT4bNc8Vd'\n"
+    provider = ScriptedProvider()
+    result = run(setup, provider, source=leaky, max_rounds=1)
+    assert provider.calls == []
+    assert "not sent to a model" in result.rounds[0].attempts[0].note

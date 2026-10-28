@@ -61,9 +61,9 @@ class Config:
     taint_sources: list[str] = field(default_factory=list)
     taint_sinks: list[str] = field(default_factory=list)
     taint_sanitizers: list[str] = field(default_factory=list)
+    private_packages: list[str] = field(default_factory=list)
     llm_provider: str = "none"
     llm_model: str = ""
-    llm_max_tokens: int = 4096
     llm_base_url: str = ""
     sandbox_backend: str = "auto"
     sandbox_image: str = "python:3.12-slim"
@@ -110,6 +110,8 @@ class Config:
                 raise ConfigError("network.cache_ttl_hours: expected a non-negative integer")
             cfg.cache_ttl_hours = ttl
 
+        cfg.private_packages = _str_list(_table(data, "packages"), "private")
+
         llm = _table(data, "llm")
         if "provider" in llm:
             provider = str(llm["provider"]).lower()
@@ -118,11 +120,6 @@ class Config:
             cfg.llm_provider = provider
         cfg.llm_model = str(llm.get("model", cfg.llm_model))
         cfg.llm_base_url = str(llm.get("base_url", cfg.llm_base_url))
-        if "max_tokens" in llm:
-            tokens = llm["max_tokens"]
-            if not isinstance(tokens, int) or tokens < 1:
-                raise ConfigError("llm.max_tokens: expected a positive integer")
-            cfg.llm_max_tokens = tokens
 
         sandbox = _table(data, "sandbox")
         backend = str(sandbox.get("backend", cfg.sandbox_backend)).lower()
@@ -213,10 +210,12 @@ drf = false                 # style drift against the rest of the repo (opt-in)
 registry_lookups = true     # query PyPI to check that imports exist
 cache_ttl_hours = 24
 
+# [packages]
+# private = ["my_company_lib"]   # imports from a private index: skipped by the HAL rules
+
 # [llm]                      # only used by --spec judging, gen-tests and fix
 # provider = "anthropic"     # anthropic | openai | ollama | none
 # model = "your-model-id"    # no default: model names change, set the one you use
-# max_tokens = 4096
 #
 # [sandbox]                  # where generated tests run
 # backend = "auto"           # auto | docker | unshare | local

@@ -69,7 +69,7 @@ Severity: high. Module: `hal`. Status: stable.
 
 **Why it matters.** AI assistants invent plausible package names. Installing a name that does not exist fails, and an attacker can register it and ship malware (slopsquatting).
 
-**How to fix.** Check the import. Use the real package name, or remove the dependency.
+**How to fix.** Check the import. Use the real package name, or remove the dependency. If it comes from a private index, list it under `[packages] private` in slopguard.toml.
 
 References: CWE-829, LLM03:2025 Supply Chain
 

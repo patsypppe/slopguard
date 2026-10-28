@@ -95,7 +95,7 @@ def scan_source(
 ) -> list[Finding]:
     """Scan a string of source code, for example an assistant's answer before it is saved.
 
-    Offline and file-system free: package lookups and manifest checks are skipped.
+    Offline and read-only: PyPI lookups are skipped. Project checks use the current directory.
     """
     config = config or Config()
     selected = select_rules(config, modules, rules)
