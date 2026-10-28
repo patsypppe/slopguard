@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 from slopguard import docgen
 
 
@@ -13,9 +16,6 @@ def test_every_command_is_documented():
 
 
 # -- links ---------------------------------------------------------------------------------
-
-import re
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LINK = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
