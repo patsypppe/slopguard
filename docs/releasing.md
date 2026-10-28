@@ -28,9 +28,10 @@ first served and a pending publisher does **not** reserve one, so do step 1 and 
 
 3. Repeat on <https://test.pypi.org/manage/account/publishing/> with environment name `testpypi`.
 
-**2. Create the two GitHub environments.** In the repository: Settings, Environments, New environment,
-named exactly `pypi` and `testpypi`. For `pypi`, add yourself under *Required reviewers* so a release
-needs your approval, and restrict it to tags matching `v*`.
+**2. GitHub environments.** The workflow names two deployment environments, `pypi` and `testpypi`.
+GitHub creates them the first time a run uses them, so there is nothing to set up. Afterwards, in
+Settings, Environments, open `pypi` and add yourself under *Required reviewers*, so every release needs
+your approval, and restrict deployment branches and tags to `v*`.
 
 **3. Dry run on TestPyPI.** Actions, Release, Run workflow, branch `main`. When it finishes:
 
