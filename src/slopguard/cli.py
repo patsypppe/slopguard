@@ -10,8 +10,9 @@ from rich.console import Console
 from rich.table import Table
 
 from slopguard import __version__
+from slopguard.api import select_rules
 from slopguard.bench import run_benchmark
-from slopguard.config import MODULES, STARTER_CONFIG, Config, ConfigError
+from slopguard.config import STARTER_CONFIG, Config, ConfigError
 from slopguard.context import build_project
 from slopguard.engine import (
     changed_files,
@@ -62,26 +63,10 @@ def main(  # slopguard: ignore[INC-02] Typer callback, body is intentionally emp
 
 
 def _select_rules(config: Config, modules: list[str], rule_ids: list[str]) -> list[Rule]:
-    for name in modules:
-        if name not in MODULES:
-            raise _fail(f"unknown module {name!r}; expected one of: {', '.join(MODULES)}")
-    chosen = []
-    wanted = {r.upper() for r in rule_ids}
-    for rule in all_rules():
-        meta = rule.meta
-        if wanted and meta.id not in wanted:
-            continue
-        if modules:
-            if meta.module not in modules:
-                continue
-        elif not config.modules.get(meta.module, True):
-            continue
-        if config.rule_enabled(meta.id):
-            chosen.append(rule)
-    unknown = wanted - {r.meta.id for r in all_rules()}
-    if unknown:
-        raise _fail(f"unknown rule(s): {', '.join(sorted(unknown))}")
-    return chosen
+    try:
+        return select_rules(config, modules, rule_ids)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
 
 
 @app.command()
@@ -90,7 +75,7 @@ def scan(
     fmt: str = typer.Option("terminal", "--format", "-f", help="terminal, json, markdown or sarif."),
     output: Path | None = typer.Option(None, "--output", "-o", help="Write the report here."),
     severity: str | None = typer.Option(None, "--severity", help="Minimum severity to report."),
-    fail_on: str | None = typer.Option(None, "--fail-on", help="Exit 1 at this severity or above, or 'none'."),
+    fail_on: str | None = typer.Option(None, "--fail-on", help="Exit 1 at this severity or above, or 'none' (default: high)."),
     module: list[str] | None = typer.Option(None, "--module", "-m", help="Run only these modules."),
     rule: list[str] | None = typer.Option(None, "--rule", "-r", help="Run only these rule IDs."),
     exclude: list[str] | None = typer.Option(None, "--exclude", help="Glob to skip (repeatable)."),
